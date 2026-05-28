@@ -48,6 +48,9 @@ HEADERS = [
 
 SB_COLUMNS = ["Nome_SB", "Nome_SB_dir", "Nome_SB_esq"]
 KM_COLUMNS = ["KM_esq", "KM_pri", "KM_dir"]
+COORDINATE_SCALE = 36000
+COORDINATE_COLUMNS = ["Lat_decimal", "Long_decimal", "Google_Maps"]
+DATA_COLUMNS = HEADERS + COORDINATE_COLUMNS
 INVALID_SB_VALUES = {"", "-", "0", "NAN", "NONE"}
 SUMMARY_COLUMNS = [
     "Consulta",
@@ -55,7 +58,22 @@ SUMMARY_COLUMNS = [
     "SB",
     "KM_inicio",
     "KM_fim",
+    "Lat_decimal",
+    "Long_decimal",
+    "Google_Maps",
     "Submalhas",
+    "Linhas",
+]
+SUBMALHA_SUMMARY_COLUMNS = [
+    "Consulta",
+    "Status",
+    "Submalha",
+    "KM_inicio",
+    "KM_fim",
+    "Lat_decimal",
+    "Long_decimal",
+    "Google_Maps",
+    "SBs",
     "Linhas",
 ]
 
@@ -97,7 +115,23 @@ def load_malha_from_bytes(file_name, file_bytes):
     if df.empty:
         raise ValueError("Nenhuma linha valida com 38 colunas foi encontrada.")
 
+    df = add_converted_coordinates(df)
+
     return df, stats
+
+
+def add_converted_coordinates(df):
+    df = df.copy()
+    lat = pd.to_numeric(df["Lat"], errors="coerce") / COORDINATE_SCALE
+    lon = pd.to_numeric(df["Long"], errors="coerce") / COORDINATE_SCALE
+
+    df["Lat_decimal"] = lat.round(6)
+    df["Long_decimal"] = lon.round(6)
+    df["Google_Maps"] = [
+        _maps_link(lat_value, lon_value)
+        for lat_value, lon_value in zip(df["Lat_decimal"], df["Long_decimal"])
+    ]
+    return df
 
 
 def build_sb_index(df):
@@ -111,6 +145,17 @@ def build_sb_index(df):
         valid_values = values[values.map(is_valid_sb)]
         for sb, row_indexes in valid_values.groupby(valid_values).groups.items():
             index.setdefault(sb, set()).update(row_indexes.tolist())
+
+    return index
+
+
+def build_submalha_index(df):
+    index = {}
+    values = df["M"].map(lambda value: str(value).strip())
+    valid_values = values[values.ne("")]
+
+    for submalha, row_indexes in valid_values.groupby(valid_values).groups.items():
+        index.setdefault(submalha, set()).update(row_indexes.tolist())
 
     return index
 
@@ -130,6 +175,9 @@ def search_sbs(input_text, df, sb_index):
                     "SB": "",
                     "KM_inicio": "",
                     "KM_fim": "",
+                    "Lat_decimal": "",
+                    "Long_decimal": "",
+                    "Google_Maps": "",
                     "Submalhas": "",
                     "Linhas": 0,
                 }
@@ -148,7 +196,48 @@ def search_sbs(input_text, df, sb_index):
     detail_df = (
         pd.concat(detail_frames, ignore_index=True)
         if detail_frames
-        else pd.DataFrame(columns=["Consulta", "SB"] + HEADERS)
+        else pd.DataFrame(columns=["Consulta", "SB"] + DATA_COLUMNS)
+    )
+    return summary_df, detail_df
+
+
+def search_submalhas(input_text, df, submalha_index):
+    available_submalhas = sorted(submalha_index, key=_natural_sort_key)
+    summary_rows = []
+    detail_frames = []
+
+    for consulta in parse_consultas(input_text):
+        submalha = find_submalha_name(consulta, available_submalhas)
+        if not submalha:
+            summary_rows.append(
+                {
+                    "Consulta": consulta,
+                    "Status": "Nao encontrada",
+                    "Submalha": "",
+                    "KM_inicio": "",
+                    "KM_fim": "",
+                    "Lat_decimal": "",
+                    "Long_decimal": "",
+                    "Google_Maps": "",
+                    "SBs": "",
+                    "Linhas": 0,
+                }
+            )
+            continue
+
+        rows = df.loc[sorted(submalha_index[submalha])].copy()
+        summary_rows.append(_summarize_submalha_rows(consulta, submalha, rows))
+
+        detail = rows.copy()
+        detail.insert(0, "Consulta", consulta)
+        detail.insert(1, "Submalha", submalha)
+        detail_frames.append(detail)
+
+    summary_df = pd.DataFrame(summary_rows, columns=SUBMALHA_SUMMARY_COLUMNS)
+    detail_df = (
+        pd.concat(detail_frames, ignore_index=True)
+        if detail_frames
+        else pd.DataFrame(columns=["Consulta", "Submalha"] + DATA_COLUMNS)
     )
     return summary_df, detail_df
 
@@ -175,14 +264,40 @@ def find_sb_name(query, available_sbs):
     return None
 
 
+def find_submalha_name(query, available_submalhas):
+    query = str(query).strip()
+    if not query:
+        return None
+
+    if query in available_submalhas:
+        return query
+
+    query_number = _to_number(query)
+    if query_number is None:
+        return None
+
+    for submalha in available_submalhas:
+        submalha_number = _to_number(submalha)
+        if submalha_number is not None and submalha_number == query_number:
+            return submalha
+
+    return None
+
+
 def filter_by_sb(df, sb_index, sb):
     if not sb or sb not in sb_index:
         return pd.DataFrame(columns=df.columns)
     return df.loc[sorted(sb_index[sb])].copy()
 
 
+def filter_by_submalha(df, submalha_index, submalha):
+    if not submalha or submalha not in submalha_index:
+        return pd.DataFrame(columns=df.columns)
+    return df.loc[sorted(submalha_index[submalha])].copy()
+
+
 def dataframe_to_csv_bytes(df):
-    return df.to_csv(index=False, sep=";").encode("utf-8-sig")
+    return df.to_csv(index=False, sep=";", float_format="%.6f").encode("utf-8-sig")
 
 
 def _summarize_rows(consulta, sb, rows):
@@ -198,6 +313,7 @@ def _summarize_rows(consulta, sb, rows):
         {str(value).strip() for value in rows["M"] if str(value).strip()},
         key=_natural_sort_key,
     )
+    lat_decimal, long_decimal, google_maps = _first_coordinate(rows)
 
     return {
         "Consulta": consulta,
@@ -205,9 +321,67 @@ def _summarize_rows(consulta, sb, rows):
         "SB": sb,
         "KM_inicio": km_inicio,
         "KM_fim": km_fim,
+        "Lat_decimal": lat_decimal,
+        "Long_decimal": long_decimal,
+        "Google_Maps": google_maps,
         "Submalhas": ",".join(submalhas),
         "Linhas": len(rows),
     }
+
+
+def _summarize_submalha_rows(consulta, submalha, rows):
+    km_inicio, km_fim = _km_range(rows)
+    lat_decimal, long_decimal, google_maps = _first_coordinate(rows)
+
+    sbs = set()
+    for column in SB_COLUMNS:
+        values = rows[column].map(lambda value: str(value).strip())
+        sbs.update(value for value in values if is_valid_sb(value))
+
+    return {
+        "Consulta": consulta,
+        "Status": "Encontrada",
+        "Submalha": submalha,
+        "KM_inicio": km_inicio,
+        "KM_fim": km_fim,
+        "Lat_decimal": lat_decimal,
+        "Long_decimal": long_decimal,
+        "Google_Maps": google_maps,
+        "SBs": ",".join(sorted(sbs)),
+        "Linhas": len(rows),
+    }
+
+
+def _km_range(rows):
+    km_values = []
+    for column in KM_COLUMNS:
+        km_values.append(pd.to_numeric(rows[column], errors="coerce"))
+
+    km_series = pd.concat(km_values, ignore_index=True).dropna()
+    if km_series.empty:
+        return "", ""
+
+    return _format_number(km_series.min()), _format_number(km_series.max())
+
+
+def _first_coordinate(rows):
+    valid_rows = rows[
+        rows["Lat_decimal"].notna() & rows["Long_decimal"].notna()
+    ].copy()
+    if valid_rows.empty:
+        return "", "", ""
+
+    km_values = pd.to_numeric(valid_rows["KM_pri"], errors="coerce")
+    if km_values.notna().any():
+        row = valid_rows.loc[km_values.idxmin()]
+    else:
+        row = valid_rows.iloc[0]
+
+    return (
+        round(float(row["Lat_decimal"]), 6),
+        round(float(row["Long_decimal"]), 6),
+        row["Google_Maps"],
+    )
 
 
 def _read_text_export(file_bytes):
@@ -326,6 +500,23 @@ def _format_number(value):
     if value.is_integer():
         return int(value)
     return round(value, 3)
+
+
+def _to_number(value):
+    text = str(value).strip().replace(",", ".")
+    if not text:
+        return None
+
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _maps_link(lat, lon):
+    if pd.isna(lat) or pd.isna(lon):
+        return ""
+    return f"https://www.google.com/maps?q={float(lat):.6f},{float(lon):.6f}"
 
 
 def _natural_sort_key(value):

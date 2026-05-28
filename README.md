@@ -9,8 +9,10 @@ O objetivo e manter a consulta rapida e direta, sem precisar substituir manualme
 - Upload da malha exportada diretamente pela interface.
 - Suporte a arquivos `.txt`, `.csv`, `.xlsx` e `.xls`.
 - Consulta de uma ou varias SBs de uma vez.
+- Consulta de uma ou varias submalhas pela coluna `M`.
 - Busca flexivel, aceitando variacoes como `LIDP` para encontrar `LID___P`.
-- Resumo com KM inicial, KM final, submalhas e quantidade de linhas encontradas.
+- Resumo com KM inicial, KM final, coordenadas, submalhas/SBs e quantidade de linhas encontradas.
+- Mapa com as coordenadas convertidas da consulta.
 - Visualizacao das linhas encontradas.
 - Download dos resultados em CSV.
 - Visualizacao geral da malha carregada.
@@ -56,15 +58,22 @@ http://localhost:8501
 
 1. Abra a aplicacao.
 2. Carregue a malha exportada no menu lateral.
-3. Digite uma ou mais SBs no campo de consulta.
-4. Separe multiplas SBs por espaco, virgula ou ponto e virgula.
-5. Clique em **Buscar**.
-6. Confira o resumo e, se necessario, baixe as linhas encontradas em CSV.
+3. Escolha a aba de consulta por `SB` ou por `Submalha`.
+4. Digite uma ou mais SBs/submalhas no campo de consulta.
+5. Separe multiplos valores por espaco, virgula ou ponto e virgula.
+6. Clique em **Buscar**.
+7. Confira o resumo, o mapa e, se necessario, baixe as linhas encontradas em CSV.
 
 Exemplo de consulta:
 
 ```text
 LID___P, LID___D
+```
+
+Exemplo de consulta por submalha:
+
+```text
+10, 97
 ```
 
 ## Publicacao no Streamlit Community Cloud
